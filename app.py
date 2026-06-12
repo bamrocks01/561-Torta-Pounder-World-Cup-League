@@ -1218,22 +1218,32 @@ with tabs[1]:
             st.markdown(f"### {selected_dashboard_owner}")
             render_owner_summary_cards(owner_row)
 
-            render_owner_upcoming_matches(selected_dashboard_owner, match_log)
+            dashboard_view = st.radio(
+                "Owner dashboard view",
+                ["Roster", "Upcoming Matches"],
+                horizontal=True,
+                label_visibility="collapsed",
+                key="owner_dashboard_view",
+            )
 
-            st.markdown("### Roster")
+            if dashboard_view == "Roster":
+                st.markdown("### Roster")
 
-            for _, country_row in owner_teams.iterrows():
-                country = country_row["team"]
+                for _, country_row in owner_teams.iterrows():
+                    country = country_row["team"]
 
-                if match_log.empty:
-                    country_matches = pd.DataFrame()
-                else:
-                    country_matches = match_log[
-                        (match_log["owner"] == selected_dashboard_owner)
-                        & (match_log["team"] == country)
-                    ].copy()
+                    if match_log.empty:
+                        country_matches = pd.DataFrame()
+                    else:
+                        country_matches = match_log[
+                            (match_log["owner"] == selected_dashboard_owner)
+                            & (match_log["team"] == country)
+                        ].copy()
 
-                render_country_breakdown_card(country_row, country_matches)
+                    render_country_breakdown_card(country_row, country_matches)
+
+            else:
+                render_owner_upcoming_matches(selected_dashboard_owner, match_log)
 
 with tabs[2]:
     st.subheader("All Team Cards")
