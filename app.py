@@ -1,6 +1,7 @@
 import os
 import re
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import requests
@@ -401,6 +402,96 @@ def pretty_match_log(df):
 
 
 
+def pretty_competition_label(value: str) -> str:
+    """Convert API labels like GROUP_STAGE or GROUP_A into clean display text."""
+    if not value:
+        return ""
+
+    value = str(value).strip()
+
+    overrides = {
+        "GROUP_STAGE": "Group Stage",
+        "LAST_32": "Round of 32",
+        "ROUND_OF_32": "Round of 32",
+        "LAST_16": "Round of 16",
+        "ROUND_OF_16": "Round of 16",
+        "QUARTER_FINALS": "Quarterfinals",
+        "SEMI_FINALS": "Semifinals",
+        "FINAL": "Final",
+        "THIRD_PLACE": "Third Place",
+    }
+
+    upper_value = value.upper()
+
+    if upper_value in overrides:
+        return overrides[upper_value]
+
+    if upper_value.startswith("GROUP_") and len(upper_value.split("_")) == 2:
+        return f"Group {upper_value.split('_')[1]}"
+
+    return value.replace("_", " ").title()
+
+
+def pretty_status(status: str) -> str:
+    """Convert API statuses into user-facing labels."""
+    labels = {
+        "FINISHED": "✅ Finished",
+        "IN_PLAY": "🟢 Live",
+        "LIVE": "🟢 Live",
+        "PAUSED": "🟡 Paused",
+        "TIMED": "🕒 Scheduled",
+        "SCHEDULED": "🕒 Scheduled",
+        "POSTPONED": "Postponed",
+        "SUSPENDED": "Suspended",
+        "CANCELLED": "Cancelled",
+        "AWARDED": "Awarded",
+    }
+    return labels.get(str(status).upper(), pretty_competition_label(status))
+
+
+def format_match_datetime(utc_date: str, timezone_name: str = "America/New_York") -> str:
+    """Format football-data.org UTC dates as Eastern time for the league."""
+    if not utc_date:
+        return ""
+
+    try:
+        dt = datetime.fromisoformat(str(utc_date).replace("Z", "+00:00"))
+        local_dt = dt.astimezone(ZoneInfo(timezone_name))
+        return local_dt.strftime("%b %-d, %Y • %-I:%M %p ET")
+    except Exception:
+        try:
+            dt = datetime.fromisoformat(str(utc_date).replace("Z", "+00:00"))
+            local_dt = dt.astimezone(ZoneInfo(timezone_name))
+            return local_dt.strftime("%b %d, %Y • %I:%M %p ET").replace(" 0", " ")
+        except Exception:
+            return str(utc_date)
+
+
+def match_context(row: pd.Series) -> str:
+    """Build a clean subtitle for match cards."""
+    parts = []
+
+    status = row.get("status", "")
+    if status:
+        parts.append(pretty_status(status))
+
+    match_time = format_match_datetime(row.get("date", ""))
+    if match_time:
+        parts.append(match_time)
+
+    stage = pretty_competition_label(row.get("stage", ""))
+    group = pretty_competition_label(row.get("group", ""))
+
+    if stage:
+        parts.append(stage)
+    if group:
+        parts.append(group)
+
+    return " • ".join(parts)
+
+
+
+
 def scoring_lines(row: pd.Series) -> list[str]:
     """Return readable scoring components for one team/match row."""
     lines = []
@@ -430,11 +521,10 @@ def match_title(row: pd.Series) -> str:
     team = row.get("team", "")
     opponent = row.get("opponent", "")
     score = row.get("score", "")
-    status = row.get("status", "")
 
     if score:
         return f"{team} {score} vs {opponent}"
-    return f"{team} vs {opponent} ({status})"
+    return f"{team} vs {opponent}"
 
 
 def render_owner_summary_cards(owner_row: pd.Series):
@@ -490,20 +580,13 @@ def render_country_breakdown_card(row: pd.Series, country_matches: pd.DataFrame)
         for _, match in country_matches.iterrows():
             lines = scoring_lines(match)
             line_html = "".join(f"<li>{line}</li>" for line in lines)
-            status = match.get("status", "")
-            status_label = {
-                "FINISHED": "✅ Finished",
-                "IN_PLAY": "🟢 Live",
-                "PAUSED": "🟡 Paused",
-                "TIMED": "⏳ Scheduled",
-                "SCHEDULED": "⏳ Scheduled",
-            }.get(status, status)
+            subtitle = match_context(match)
 
             st.markdown(
                 f"""
 <div class="breakdown-card">
     <div class="breakdown-title">{match_title(match)}</div>
-    <div class="breakdown-subtitle">{status_label} • {match.get("stage", "")}</div>
+    <div class="breakdown-subtitle">{subtitle}</div>
     <ul class="breakdown-list">
         {line_html}
     </ul>
@@ -867,16 +950,17 @@ with tabs[3]:
     else:
         display = match_log.sort_values(["date", "team"]).copy()
 
+        if "date" in display.columns:
+            display["date"] = display["date"].map(format_match_datetime)
+
         if "status" in display.columns:
-            display["status"] = display["status"].replace(
-                {
-                    "FINISHED": "✅ Finished",
-                    "IN_PLAY": "🟢 Live",
-                    "PAUSED": "🟡 Paused",
-                    "TIMED": "⏳ Scheduled",
-                    "SCHEDULED": "⏳ Scheduled",
-                }
-            )
+            display["status"] = display["status"].map(pretty_status)
+
+        if "stage" in display.columns:
+            display["stage"] = display["stage"].map(pretty_competition_label)
+
+        if "group" in display.columns:
+            display["group"] = display["group"].map(pretty_competition_label)
 
         display = pretty_match_log(display)
 
