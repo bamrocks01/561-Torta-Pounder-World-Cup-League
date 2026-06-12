@@ -1125,6 +1125,15 @@ div[data-testid="stDataFrame"] {
     border-radius: 16px;
     overflow: hidden;
 }
+
+
+/* Larger Owner Dashboard sub-tabs */
+div[data-testid="stTabs"] button[role="tab"] {
+    font-size: 1.1rem;
+    font-weight: 800;
+    padding: 0.7rem 1.15rem;
+}
+
 </style>
 """,
     unsafe_allow_html=True,
@@ -1218,15 +1227,9 @@ with tabs[1]:
             st.markdown(f"### {selected_dashboard_owner}")
             render_owner_summary_cards(owner_row)
 
-            dashboard_view = st.radio(
-                "Owner dashboard view",
-                ["Roster", "Upcoming Matches"],
-                horizontal=True,
-                label_visibility="collapsed",
-                key="owner_dashboard_view",
-            )
+            roster_tab, upcoming_tab = st.tabs(["Roster", "Upcoming Matches"])
 
-            if dashboard_view == "Roster":
+            with roster_tab:
                 st.markdown("### Roster")
 
                 for _, country_row in owner_teams.iterrows():
@@ -1242,7 +1245,7 @@ with tabs[1]:
 
                     render_country_breakdown_card(country_row, country_matches)
 
-            else:
+            with upcoming_tab:
                 render_owner_upcoming_matches(selected_dashboard_owner, match_log)
 
 with tabs[2]:
