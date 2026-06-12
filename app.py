@@ -594,20 +594,41 @@ def render_match_card(match_rows: pd.DataFrame):
     status_label = pretty_status(status)
     status_class = "status-live" if status in {"IN_PLAY", "LIVE", "PAUSED"} else "status-finished" if status in {"FINISHED", "AWARDED"} else "status-scheduled"
 
+    # Build a cleaner matchup line from the drafted teams involved.
+    participants = []
+    seen_teams = set()
+    for _, row in match_rows.sort_values(["team", "owner"]).iterrows():
+        country = row.get("team", "")
+        owner = row.get("owner", "")
+        if country and country not in seen_teams:
+            participants.append((country, owner))
+            seen_teams.add(country)
+
+    matchup_html = ""
+    if participants:
+        participant_html = "<span class='matchup-chip'>" + "</span><span class='matchup-vs'>vs</span><span class='matchup-chip'>".join(
+            f"{country} <span class='matchup-owner'>({owner})</span>" for country, owner in participants
+        ) + "</span>"
+        matchup_html = f"""
+    <div class="matchup-block">
+        <div class="impact-title">Fantasy Matchup</div>
+        <div class="matchup-line">{participant_html}</div>
+    </div>
+"""
+
     impact_items = []
     for _, row in match_rows.sort_values(["owner", "team"]).iterrows():
         owner = row.get("owner", "")
         country = row.get("team", "")
         pts = int(row.get("match_points", 0) or 0)
         row_status = str(row.get("status", "")).upper()
+        details = "; ".join(scoring_lines(row))
 
         if row_status in {"TIMED", "SCHEDULED"}:
             impact_items.append(f"<li><strong>{owner}</strong> has {country}</li>")
         elif pts > 0:
-            details = "; ".join(scoring_lines(row))
-            impact_items.append(f"<li><strong>{owner}</strong>: +{pts} from {country} <span class='impact-detail'>({details})</span></li>")
+            impact_items.append(f"<li><strong>{owner}</strong>: <span class='positive-points'>+{pts}</span> from {country} <span class='impact-detail'>({details})</span></li>")
         elif row.get("result", ""):
-            details = "; ".join(scoring_lines(row))
             impact_items.append(f"<li><strong>{owner}</strong>: +0 from {country} <span class='impact-detail'>({details})</span></li>")
         else:
             impact_items.append(f"<li><strong>{owner}</strong> has {country}</li>")
@@ -623,13 +644,13 @@ def render_match_card(match_rows: pd.DataFrame):
         <span class="match-context">{context_html}</span>
     </div>
     <div class="match-title">{title}</div>
+    {matchup_html}
     <div class="impact-title">Fantasy Impact</div>
     <ul class="impact-list">{impact_html}</ul>
 </div>
 """,
         unsafe_allow_html=True,
     )
-
 
 def render_match_section(title: str, rows: pd.DataFrame, empty_message: str, limit: int | None = None):
     st.markdown(f"### {title}")
@@ -986,6 +1007,44 @@ st.markdown(
     color: #9CA3AF;
 }
 
+.matchup-block {
+    margin-bottom: 0.75rem;
+}
+
+.matchup-line {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+    align-items: center;
+}
+
+.matchup-chip {
+    display: inline-block;
+    padding: 0.35rem 0.6rem;
+    border-radius: 999px;
+    background: rgba(15, 23, 42, 0.9);
+    border: 1px solid #374151;
+    font-weight: 800;
+    color: #E5E7EB;
+}
+
+.matchup-owner {
+    color: #9CA3AF;
+    font-weight: 700;
+}
+
+.matchup-vs {
+    color: #9CA3AF;
+    font-size: 12px;
+    font-weight: 900;
+    text-transform: uppercase;
+}
+
+.positive-points {
+    color: #86EFAC;
+    font-weight: 900;
+}
+
 div[data-testid="stDataFrame"] {
     border-radius: 16px;
     overflow: hidden;
@@ -1147,8 +1206,31 @@ with tabs[3]:
     if match_log.empty:
         st.info("No match data yet.")
     else:
-        match_center = match_log.copy()
-        match_center["_bucket"] = match_center.apply(match_bucket, axis=1)
+        match_center_all = match_log.copy()
+        match_center_all["_match_key"] = match_center_all.apply(match_card_key, axis=1)
+        match_center_all["_bucket"] = match_center_all.apply(match_bucket, axis=1)
+
+        match_owners = sorted(match_center_all["owner"].dropna().unique())
+        selected_match_owner = st.selectbox(
+            "Filter Match Center by owner",
+            ["All Owners"] + match_owners,
+            key="match_center_owner_filter",
+        )
+
+        if selected_match_owner != "All Owners":
+            owner_match_keys = set(
+                match_center_all.loc[
+                    match_center_all["owner"] == selected_match_owner,
+                    "_match_key",
+                ]
+            )
+            match_center = match_center_all[match_center_all["_match_key"].isin(owner_match_keys)].copy()
+            st.markdown(
+                f'<div class="section-note">Showing matches involving <strong>{selected_match_owner}</strong>\'s drafted teams.</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            match_center = match_center_all.copy()
 
         live_rows = match_center[match_center["_bucket"] == "live"]
         today_rows = match_center[match_center["_bucket"] == "today"]
