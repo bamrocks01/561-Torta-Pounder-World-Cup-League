@@ -1,9 +1,10 @@
 import os
 import re
-import requests
+from datetime import datetime
+
 import pandas as pd
+import requests
 import streamlit as st
-from datetime import datetime, timezone
 
 st.set_page_config(
     page_title="The 561 Torta Pounder World Cup Draft",
@@ -34,20 +35,16 @@ TEAM_ALIASES = {
     "IR Iran": "Iran",
 }
 
-# Optional manual correction layer.
-# Use this if the API does not expose a knockout/advancement flag exactly how your league wants it.
-# Format:
-# MANUAL_ADVANCEMENT_BONUSES = {"Brazil": 3, "France": 8}
-# Meaning Brazil gets +3 total advancement points, France gets +3 group +5 R32 = +8.
 MANUAL_ADVANCEMENT_BONUSES = {}
+
 
 def normalize_team(name: str) -> str:
     if not name:
         return ""
     name = str(name).strip()
     name = TEAM_ALIASES.get(name, name)
-    name = re.sub(r"\s+", " ", name)
-    return name
+    return re.sub(r"\s+", " ", name)
+
 
 def get_secret_token() -> str:
     try:
@@ -55,16 +52,20 @@ def get_secret_token() -> str:
     except Exception:
         return os.getenv("FOOTBALL_DATA_TOKEN", "")
 
+
 @st.cache_data(ttl=60, show_spinner=False)
 def fetch_world_cup_matches(api_token: str) -> list[dict]:
     if not api_token:
         return []
+
     url = f"{API_BASE}/competitions/{COMPETITION_CODE}/matches"
     params = {"season": SEASON}
     headers = {"X-Auth-Token": api_token}
+
     response = requests.get(url, params=params, headers=headers, timeout=20)
     response.raise_for_status()
     return response.json().get("matches", [])
+
 
 def score_match_for_team(match: dict, team: str) -> dict | None:
     home = normalize_team(match.get("homeTeam", {}).get("name"))
@@ -78,10 +79,8 @@ def score_match_for_team(match: dict, team: str) -> dict | None:
     utc_date = match.get("utcDate", "")
     stage = match.get("stage", "")
     group = match.get("group", "")
-    score = match.get("score", {})
+    score = match.get("score", {}) or {}
 
-    # football-data.org commonly fills fullTime after regulation/extra time, with penalties separate.
-    # Your league rule says shootouts count as a draw, so penalties are intentionally ignored for match-result points.
     full_time = score.get("fullTime") or {}
     regular_time = score.get("regularTime") or {}
     extra_time = score.get("extraTime") or {}
@@ -89,10 +88,10 @@ def score_match_for_team(match: dict, team: str) -> dict | None:
     home_goals = full_time.get("home")
     away_goals = full_time.get("away")
 
-    # Fallbacks for APIs / statuses that fill a different score object first.
     if home_goals is None or away_goals is None:
         home_goals = extra_time.get("home")
         away_goals = extra_time.get("away")
+
     if home_goals is None or away_goals is None:
         home_goals = regular_time.get("home")
         away_goals = regular_time.get("away")
@@ -114,14 +113,18 @@ def score_match_for_team(match: dict, team: str) -> dict | None:
             points += 3
             result = "W"
             record_delta["W"] = 1 if is_finished else 0
+
             if team_goals - opp_goals >= 3:
                 bonus_3_plus = 1
+
             if opp_goals == 0:
                 bonus_shutout = 1
+
         elif team_goals == opp_goals:
             points += 1
             result = "D"
             record_delta["D"] = 1 if is_finished else 0
+
         else:
             result = "L"
             record_delta["L"] = 1 if is_finished else 0
@@ -129,6 +132,7 @@ def score_match_for_team(match: dict, team: str) -> dict | None:
         points += bonus_3_plus + bonus_shutout
 
     opponent = away if team == home else home
+
     display_score = ""
     if home_goals is not None and away_goals is not None:
         display_score = f"{home_goals}-{away_goals}" if team == home else f"{away_goals}-{home_goals}"
@@ -152,50 +156,41 @@ def score_match_for_team(match: dict, team: str) -> dict | None:
         "live": is_live,
     }
 
-def compute_advancement_bonuses(matches: list[dict], drafted_teams: set[str]) -> dict[str, int]:
-    """
-    Best-effort automatic bonuses from finished knockout matches.
-    Rules from the sheet:
-      +3 survive group stage
-      +5 win Round of 32
-      +7 win Quarterfinal
-      +10 win Semifinal
-      +15 win Final
-      +25 win Cup
 
-    Why this is best-effort:
-    APIs vary on whether they expose "qualified", "winner", "stage" and shootout winners.
-    This catches winners when the API has winner metadata or a non-tied full-time knockout score.
-    For shootouts, manual bonuses may be needed unless the API returns score.winner.
-    """
+def compute_advancement_bonuses(matches: list[dict], drafted_teams: set[str]) -> dict[str, int]:
     bonuses = {team: 0 for team in drafted_teams}
     won_r32 = set()
     won_qf = set()
     won_sf = set()
-    finalists_won = set()
+    won_final = set()
     knockout_teams_seen = set()
 
     for match in matches:
         stage = (match.get("stage") or "").upper()
+
         if "GROUP" in stage:
             continue
 
         home = normalize_team(match.get("homeTeam", {}).get("name"))
         away = normalize_team(match.get("awayTeam", {}).get("name"))
-        for t in (home, away):
-            if t in drafted_teams:
-                knockout_teams_seen.add(t)
+
+        for team in (home, away):
+            if team in drafted_teams:
+                knockout_teams_seen.add(team)
 
         if match.get("status") not in {"FINISHED", "AWARDED"}:
             continue
 
         score = match.get("score", {}) or {}
         winner = normalize_team(score.get("winner") or "")
+
         if winner not in {home, away}:
-            ft = score.get("fullTime") or {}
-            hg, ag = ft.get("home"), ft.get("away")
-            if hg is not None and ag is not None and hg != ag:
-                winner = home if hg > ag else away
+            full_time = score.get("fullTime") or {}
+            home_goals = full_time.get("home")
+            away_goals = full_time.get("away")
+
+            if home_goals is not None and away_goals is not None and home_goals != away_goals:
+                winner = home if home_goals > away_goals else away
 
         if winner not in drafted_teams:
             continue
@@ -207,17 +202,21 @@ def compute_advancement_bonuses(matches: list[dict], drafted_teams: set[str]) ->
         elif "SEMI" in stage:
             won_sf.add(winner)
         elif "FINAL" in stage and "THIRD" not in stage:
-            finalists_won.add(winner)
+            won_final.add(winner)
 
     for team in knockout_teams_seen:
         bonuses[team] += 3
+
     for team in won_r32:
         bonuses[team] += 5
+
     for team in won_qf:
         bonuses[team] += 7
+
     for team in won_sf:
         bonuses[team] += 10
-    for team in finalists_won:
+
+    for team in won_final:
         bonuses[team] += 15 + 25
 
     for team, bonus in MANUAL_ADVANCEMENT_BONUSES.items():
@@ -225,8 +224,15 @@ def compute_advancement_bonuses(matches: list[dict], drafted_teams: set[str]) ->
 
     return bonuses
 
+
 def build_tables(matches: list[dict], draft_df: pd.DataFrame):
     draft_df = draft_df.copy()
+    draft_df.columns = [c.strip().lower() for c in draft_df.columns]
+
+    if "owner" not in draft_df.columns or "team" not in draft_df.columns:
+        st.error("draft_teams.csv must have columns named owner and team.")
+        st.stop()
+
     draft_df["team"] = draft_df["team"].map(normalize_team)
 
     drafted_teams = set(draft_df["team"])
@@ -235,6 +241,7 @@ def build_tables(matches: list[dict], draft_df: pd.DataFrame):
     for _, drafted in draft_df.iterrows():
         team = drafted["team"]
         owner = drafted["owner"]
+
         for match in matches:
             scored = score_match_for_team(match, team)
             if scored:
@@ -249,7 +256,21 @@ def build_tables(matches: list[dict], draft_df: pd.DataFrame):
         team_table["advancement_bonus"] = 0
         team_table["total_points"] = 0
         team_table["record"] = "0-0-0"
-        return team_table, pd.DataFrame(), pd.DataFrame()
+        team_table["live_games"] = 0
+
+        owner_table = (
+            team_table.groupby("owner", as_index=False)
+            .agg(
+                total_points=("total_points", "sum"),
+                match_points=("match_points", "sum"),
+                advancement_bonus=("advancement_bonus", "sum"),
+                live_games=("live_games", "sum"),
+            )
+        )
+
+        owner_table["record"] = "0-0-0"
+
+        return team_table, owner_table, match_log
 
     advancement = compute_advancement_bonuses(matches, drafted_teams)
 
@@ -263,17 +284,42 @@ def build_tables(matches: list[dict], draft_df: pd.DataFrame):
             live_games=("live", "sum"),
         )
     )
+
     grouped["advancement_bonus"] = grouped["team"].map(advancement).fillna(0).astype(int)
     grouped["total_points"] = grouped["match_points"] + grouped["advancement_bonus"]
-    grouped["record"] = grouped["W"].astype(str) + "-" + grouped["D"].astype(str) + "-" + grouped["L"].astype(str)
+    grouped["record"] = (
+        grouped["W"].astype(int).astype(str)
+        + "-"
+        + grouped["D"].astype(int).astype(str)
+        + "-"
+        + grouped["L"].astype(int).astype(str)
+    )
 
-    all_teams = draft_df.merge(grouped, on=["owner", "team"], how="left").fillna({
-        "match_points": 0, "W": 0, "D": 0, "L": 0, "live_games": 0,
-        "advancement_bonus": 0, "total_points": 0
-    })
+    all_teams = draft_df.merge(grouped, on=["owner", "team"], how="left")
+
+    all_teams = all_teams.fillna(
+        {
+            "match_points": 0,
+            "W": 0,
+            "D": 0,
+            "L": 0,
+            "live_games": 0,
+            "advancement_bonus": 0,
+            "total_points": 0,
+            "record": "0-0-0",
+        }
+    )
+
     for col in ["match_points", "W", "D", "L", "live_games", "advancement_bonus", "total_points"]:
         all_teams[col] = all_teams[col].astype(int)
-    all_teams["record"] = all_teams["W"].astype(str) + "-" + all_teams["D"].astype(str) + "-" + all_teams["L"].astype(str)
+
+    all_teams["record"] = (
+        all_teams["W"].astype(str)
+        + "-"
+        + all_teams["D"].astype(str)
+        + "-"
+        + all_teams["L"].astype(str)
+    )
 
     owner_table = (
         all_teams.groupby("owner", as_index=False)
@@ -288,75 +334,197 @@ def build_tables(matches: list[dict], draft_df: pd.DataFrame):
         )
         .sort_values(["total_points", "match_points"], ascending=False)
     )
-    owner_table["record"] = owner_table["W"].astype(str) + "-" + owner_table["D"].astype(str) + "-" + owner_table["L"].astype(str)
 
-    return all_teams.sort_values(["owner", "total_points"], ascending=[True, False]), owner_table, match_log
+    owner_table["record"] = (
+        owner_table["W"].astype(int).astype(str)
+        + "-"
+        + owner_table["D"].astype(int).astype(str)
+        + "-"
+        + owner_table["L"].astype(int).astype(str)
+    )
+
+    return (
+        all_teams.sort_values(["owner", "total_points"], ascending=[True, False]),
+        owner_table,
+        match_log,
+    )
+
+
+def pretty_owner_table(df):
+    display = df.copy()
+    return display.rename(
+        columns={
+            "owner": "Owner",
+            "total_points": "Total",
+            "match_points": "Match Pts",
+            "advancement_bonus": "Bonus",
+            "record": "Record",
+            "live_games": "Live",
+        }
+    )
+
+
+def pretty_team_table(df):
+    display = df.copy()
+    return display.rename(
+        columns={
+            "owner": "Owner",
+            "team": "Country",
+            "total_points": "Total",
+            "match_points": "Match Pts",
+            "advancement_bonus": "Bonus",
+            "record": "Record",
+            "live_games": "Live",
+        }
+    )
+
+
+def pretty_match_log(df):
+    display = df.copy()
+    return display.rename(
+        columns={
+            "date": "Date",
+            "owner": "Owner",
+            "team": "Country",
+            "opponent": "Opponent",
+            "stage": "Stage",
+            "group": "Group",
+            "status": "Status",
+            "score": "Score",
+            "result": "Result",
+            "match_points": "Pts",
+            "win_by_3_bonus": "3+ Bonus",
+            "shutout_win_bonus": "Shutout Bonus",
+        }
+    )
+
 
 st.markdown(
     """
 <style>
 .block-container {
     padding-top: 2rem;
+    padding-bottom: 3rem;
 }
 
 .hero {
-    padding: 1.25rem 1.5rem;
-    border-radius: 18px;
+    padding: 1.35rem 1.6rem;
+    border-radius: 22px;
     background: linear-gradient(135deg, #12372A 0%, #0B1F1A 100%);
     border: 1px solid rgba(255,255,255,0.12);
-    margin-bottom: 1.5rem;
+    margin-bottom: 1.25rem;
 }
 
 .hero h1 {
     margin: 0;
     font-size: 42px;
     line-height: 1.1;
+    letter-spacing: -0.02em;
 }
 
 .hero p {
-    margin-top: 0.5rem;
+    margin-top: 0.6rem;
     color: #D1D5DB;
+    font-size: 15px;
 }
 
-.card {
-    padding: 1rem;
-    border-radius: 16px;
+.league-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1.1rem 1.25rem;
+    margin-bottom: 0.75rem;
+    border-radius: 18px;
     background: #111827;
     border: 1px solid #374151;
-    min-height: 120px;
 }
 
-.card-title {
-    color: #9CA3AF;
-    font-size: 14px;
-    margin-bottom: 0.35rem;
+.rank-label {
+    color: #FACC15;
+    font-size: 18px;
+    font-weight: 800;
+    margin-bottom: 0.25rem;
 }
 
-.card-score {
+.owner-name {
+    font-size: 25px;
+    font-weight: 850;
+}
+
+.total-points {
     font-size: 34px;
-    font-weight: 800;
-}
-
-.rank-card {
-    padding: 1rem;
-    border-radius: 16px;
-    background: #111827;
-    border: 1px solid #374151;
-}
-
-.rank-name {
-    font-size: 24px;
-    font-weight: 800;
-}
-
-.rank-points {
-    font-size: 38px;
     font-weight: 900;
+    white-space: nowrap;
 }
 
 .small-muted {
     color: #9CA3AF;
     font-size: 13px;
+}
+
+.country-card {
+    padding: 1rem;
+    border-radius: 18px;
+    background: #111827;
+    border: 1px solid #374151;
+    margin-bottom: 1rem;
+    min-height: 150px;
+}
+
+.country-name {
+    font-size: 22px;
+    font-weight: 850;
+    margin-bottom: 0.25rem;
+}
+
+.country-owner {
+    color: #9CA3AF;
+    font-size: 13px;
+    margin-bottom: 0.8rem;
+}
+
+.country-points {
+    font-size: 34px;
+    font-weight: 900;
+    margin-bottom: 0.35rem;
+}
+
+.country-meta {
+    color: #D1D5DB;
+    font-size: 13px;
+    line-height: 1.6;
+}
+
+.live-pill {
+    display: inline-block;
+    padding: 0.15rem 0.45rem;
+    border-radius: 999px;
+    background: rgba(34,197,94,0.15);
+    color: #86EFAC;
+    font-size: 12px;
+    font-weight: 700;
+    margin-left: 0.35rem;
+}
+
+.dead-pill {
+    display: inline-block;
+    padding: 0.15rem 0.45rem;
+    border-radius: 999px;
+    background: rgba(156,163,175,0.12);
+    color: #D1D5DB;
+    font-size: 12px;
+    font-weight: 700;
+    margin-left: 0.35rem;
+}
+
+.section-note {
+    color: #9CA3AF;
+    margin-bottom: 1rem;
+}
+
+div[data-testid="stDataFrame"] {
+    border-radius: 16px;
+    overflow: hidden;
 }
 </style>
 """,
@@ -367,7 +535,7 @@ st.markdown(
     """
 <div class="hero">
     <h1>The 561 Torta Pounder World Cup Draft ⚽️</h1>
-    <p>Live-ish fantasy standings powered by football-data.org. Scores refresh every 60 seconds to stay within API limits.</p>
+    <p>Live fantasy standings powered by football-data.org.</p>
 </div>
 """,
     unsafe_allow_html=True,
@@ -394,99 +562,6 @@ else:
 
 team_table, owner_table, match_log = build_tables(matches, draft)
 
-# Clean column names for display
-def pretty_owner_table(df):
-    if df.empty:
-        return df
-    display = df.copy()
-    display = display.rename(
-        columns={
-            "owner": "Owner",
-            "total_points": "Total",
-            "match_points": "Match Pts",
-            "advancement_bonus": "Bonus",
-            "record": "Record",
-            "live_games": "Live",
-        }
-    )
-    return display
-
-def pretty_team_table(df):
-    if df.empty:
-        return df
-    display = df.copy()
-    display = display.rename(
-        columns={
-            "owner": "Owner",
-            "team": "Country",
-            "total_points": "Total",
-            "match_points": "Match Pts",
-            "advancement_bonus": "Bonus",
-            "record": "Record",
-            "live_games": "Live",
-        }
-    )
-    return display
-
-def pretty_match_log(df):
-    if df.empty:
-        return df
-    display = df.copy()
-    display = display.rename(
-        columns={
-            "date": "Date",
-            "owner": "Owner",
-            "team": "Country",
-            "opponent": "Opponent",
-            "stage": "Stage",
-            "group": "Group",
-            "status": "Status",
-            "score": "Score",
-            "result": "Result",
-            "match_points": "Pts",
-            "win_by_3_bonus": "3+ Bonus",
-            "shutout_win_bonus": "Shutout Bonus",
-        }
-    )
-    return display
-
-metric1, metric2, metric3 = st.columns(3)
-
-with metric1:
-    st.markdown(
-        f"""
-<div class="card">
-    <div class="card-title">Drafted Countries</div>
-    <div class="card-score">{len(draft)}</div>
-</div>
-""",
-        unsafe_allow_html=True,
-    )
-
-with metric2:
-    st.markdown(
-        f"""
-<div class="card">
-    <div class="card-title">API Matches Loaded</div>
-    <div class="card-score">{len(matches)}</div>
-</div>
-""",
-        unsafe_allow_html=True,
-    )
-
-with metric3:
-    st.markdown(
-        f"""
-<div class="card">
-    <div class="card-title">Last Refreshed</div>
-    <div class="card-score">{datetime.now().strftime("%I:%M %p")}</div>
-</div>
-""",
-        unsafe_allow_html=True,
-    )
-
-st.write("")
-
 tabs = st.tabs(["🏆 Standings", "🌎 Teams", "📋 Match Log", "📖 Rules"])
 
 with tabs[0]:
@@ -495,43 +570,37 @@ with tabs[0]:
     if owner_table.empty:
         st.info("No standings yet.")
     else:
-        top = owner_table.sort_values(["total_points", "match_points"], ascending=False).head(3)
+        ranked = owner_table.sort_values(["total_points", "match_points"], ascending=False).reset_index(drop=True)
 
-        podium_cols = st.columns(3)
+        for idx, row in ranked.iterrows():
+            rank = idx + 1
+            medal = "🥇" if rank == 1 else "🥈" if rank == 2 else "🥉" if rank == 3 else f"#{rank}"
 
-        medals = ["🥇", "🥈", "🥉"]
-
-        for i, (_, row) in enumerate(top.iterrows()):
-            with podium_cols[i]:
-                st.markdown(
-                    f"""
-<div class="rank-card">
-    <div class="small-muted">{medals[i]} Rank {i + 1}</div>
-    <div class="rank-name">{row["owner"]}</div>
-    <div class="rank-points">{int(row["total_points"])}</div>
-    <div class="small-muted">Record: {row["record"]} • Bonus: {int(row["advancement_bonus"])}</div>
+            st.markdown(
+                f"""
+<div class="league-row">
+    <div>
+        <div class="rank-label">{medal}</div>
+        <div class="owner-name">{row["owner"]}</div>
+        <div class="small-muted">Record: {row["record"]} • Match Pts: {int(row["match_points"])} • Bonus: {int(row["advancement_bonus"])}</div>
+    </div>
+    <div class="total-points">{int(row["total_points"])} pts</div>
 </div>
 """,
-                    unsafe_allow_html=True,
-                )
+                unsafe_allow_html=True,
+            )
 
-        st.write("")
-
-        display = pretty_owner_table(owner_table)
-        wanted_cols = ["Owner", "Total", "Match Pts", "Bonus", "Record", "Live"]
-        display = display[[c for c in wanted_cols if c in display.columns]]
-
-        st.dataframe(
-            display,
-            use_container_width=True,
-            hide_index=True,
-        )
+        with st.expander("Detailed Standings Table"):
+            display = pretty_owner_table(owner_table)
+            wanted_cols = ["Owner", "Total", "Match Pts", "Bonus", "Record", "Live"]
+            display = display[[c for c in wanted_cols if c in display.columns]]
+            st.dataframe(display, use_container_width=True, hide_index=True)
 
 with tabs[1]:
-    st.subheader("Owner Rosters")
+    st.subheader("Team Cards")
+    st.markdown('<div class="section-note">Filter by owner to view each drafted country as a card.</div>', unsafe_allow_html=True)
 
     owners = sorted(team_table["owner"].dropna().unique())
-
     selected_owner = st.selectbox("Select an owner", ["All Owners"] + owners)
 
     filtered = team_table.copy()
@@ -539,15 +608,35 @@ with tabs[1]:
     if selected_owner != "All Owners":
         filtered = filtered[filtered["owner"] == selected_owner]
 
-    display = pretty_team_table(filtered)
-    wanted_cols = ["Owner", "Country", "Total", "Match Pts", "Bonus", "Record", "Live"]
-    display = display[[c for c in wanted_cols if c in display.columns]]
+    filtered = filtered.sort_values(["owner", "total_points", "match_points"], ascending=[True, False, False])
 
-    st.dataframe(
-        display.sort_values(["Owner", "Total"], ascending=[True, False]),
-        use_container_width=True,
-        hide_index=True,
-    )
+    card_cols = st.columns(3)
+
+    for i, (_, row) in enumerate(filtered.iterrows()):
+        live_badge = '<span class="live-pill">LIVE</span>' if int(row["live_games"]) > 0 else '<span class="dead-pill">IDLE</span>'
+
+        with card_cols[i % 3]:
+            st.markdown(
+                f"""
+<div class="country-card">
+    <div class="country-name">{row["team"]} {live_badge}</div>
+    <div class="country-owner">Owned by {row["owner"]}</div>
+    <div class="country-points">{int(row["total_points"])} pts</div>
+    <div class="country-meta">
+        Record: {row["record"]}<br>
+        Match Points: {int(row["match_points"])}<br>
+        Advancement Bonus: {int(row["advancement_bonus"])}
+    </div>
+</div>
+""",
+                unsafe_allow_html=True,
+            )
+
+    with st.expander("Detailed Team Table"):
+        display = pretty_team_table(filtered)
+        wanted_cols = ["Owner", "Country", "Total", "Match Pts", "Bonus", "Record", "Live"]
+        display = display[[c for c in wanted_cols if c in display.columns]]
+        st.dataframe(display, use_container_width=True, hide_index=True)
 
 with tabs[2]:
     st.subheader("Match Log")
@@ -586,12 +675,7 @@ with tabs[2]:
         ]
 
         display = display[[c for c in wanted_cols if c in display.columns]]
-
-        st.dataframe(
-            display,
-            use_container_width=True,
-            hide_index=True,
-        )
+        st.dataframe(display, use_container_width=True, hide_index=True)
 
 with tabs[3]:
     st.subheader("Scoring Rules")
