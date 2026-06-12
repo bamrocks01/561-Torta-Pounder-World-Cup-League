@@ -527,6 +527,133 @@ def match_title(row: pd.Series) -> str:
     return f"{team} vs {opponent}"
 
 
+def parse_match_datetime(utc_date: str):
+    """Return a timezone-aware ET datetime for a match, or None if parsing fails."""
+    if not utc_date:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(utc_date).replace("Z", "+00:00"))
+        return dt.astimezone(ZoneInfo("America/New_York"))
+    except Exception:
+        return None
+
+
+def match_sort_datetime(row: pd.Series):
+    dt = parse_match_datetime(row.get("date", ""))
+    return dt or datetime.max.replace(tzinfo=ZoneInfo("America/New_York"))
+
+
+def match_card_key(row: pd.Series) -> str:
+    teams = sorted([str(row.get("team", "")), str(row.get("opponent", ""))])
+    return f"{row.get('date', '')}|{teams[0]}|{teams[1]}"
+
+
+def match_bucket(row: pd.Series) -> str:
+    status = str(row.get("status", "")).upper()
+    dt = parse_match_datetime(row.get("date", ""))
+    today = datetime.now(ZoneInfo("America/New_York")).date()
+
+    if status in {"IN_PLAY", "LIVE", "PAUSED"}:
+        return "live"
+    if dt and dt.date() == today:
+        return "today"
+    if status in {"TIMED", "SCHEDULED"}:
+        return "upcoming"
+    if status in {"FINISHED", "AWARDED"}:
+        return "completed"
+    return "other"
+
+
+def render_match_card(match_rows: pd.DataFrame):
+    """Render one user-friendly match card from one or more drafted-team rows."""
+    if match_rows.empty:
+        return
+
+    first = match_rows.iloc[0]
+    status = str(first.get("status", "")).upper()
+    team = first.get("team", "")
+    opponent = first.get("opponent", "")
+    score = first.get("score", "")
+
+    if score:
+        title = f"{team} {score} {opponent}"
+    else:
+        title = f"{team} vs {opponent}"
+
+    context_parts = []
+    pretty_time = format_match_datetime(first.get("date", ""))
+    if pretty_time:
+        context_parts.append(pretty_time)
+    stage = pretty_competition_label(first.get("stage", ""))
+    group = pretty_competition_label(first.get("group", ""))
+    if stage:
+        context_parts.append(stage)
+    if group:
+        context_parts.append(group)
+
+    status_label = pretty_status(status)
+    status_class = "status-live" if status in {"IN_PLAY", "LIVE", "PAUSED"} else "status-finished" if status in {"FINISHED", "AWARDED"} else "status-scheduled"
+
+    impact_items = []
+    for _, row in match_rows.sort_values(["owner", "team"]).iterrows():
+        owner = row.get("owner", "")
+        country = row.get("team", "")
+        pts = int(row.get("match_points", 0) or 0)
+        row_status = str(row.get("status", "")).upper()
+
+        if row_status in {"TIMED", "SCHEDULED"}:
+            impact_items.append(f"<li><strong>{owner}</strong> has {country}</li>")
+        elif pts > 0:
+            details = "; ".join(scoring_lines(row))
+            impact_items.append(f"<li><strong>{owner}</strong>: +{pts} from {country} <span class='impact-detail'>({details})</span></li>")
+        elif row.get("result", ""):
+            details = "; ".join(scoring_lines(row))
+            impact_items.append(f"<li><strong>{owner}</strong>: +0 from {country} <span class='impact-detail'>({details})</span></li>")
+        else:
+            impact_items.append(f"<li><strong>{owner}</strong> has {country}</li>")
+
+    impact_html = "".join(impact_items) if impact_items else "<li>No drafted-team impact yet.</li>"
+    context_html = " • ".join(context_parts)
+
+    st.markdown(
+        f"""
+<div class="match-card">
+    <div class="match-card-topline">
+        <span class="status-pill {status_class}">{status_label}</span>
+        <span class="match-context">{context_html}</span>
+    </div>
+    <div class="match-title">{title}</div>
+    <div class="impact-title">Fantasy Impact</div>
+    <ul class="impact-list">{impact_html}</ul>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+
+def render_match_section(title: str, rows: pd.DataFrame, empty_message: str, limit: int | None = None):
+    st.markdown(f"### {title}")
+    if rows.empty:
+        st.info(empty_message)
+        return
+
+    rows = rows.copy()
+    rows["_sort_dt"] = rows.apply(match_sort_datetime, axis=1)
+    rows["_match_key"] = rows.apply(match_card_key, axis=1)
+
+    ordered_keys = (
+        rows.sort_values("_sort_dt")
+        .drop_duplicates("_match_key")["_match_key"]
+        .tolist()
+    )
+
+    if limit is not None:
+        ordered_keys = ordered_keys[:limit]
+
+    for key in ordered_keys:
+        render_match_card(rows[rows["_match_key"] == key].drop(columns=["_sort_dt", "_match_key"], errors="ignore"))
+
+
 def render_owner_summary_cards(owner_row: pd.Series):
     summary_cols = st.columns(4)
     values = [
@@ -788,6 +915,77 @@ st.markdown(
     margin-top: 0.35rem;
 }
 
+
+.match-card {
+    padding: 1rem 1.15rem;
+    border-radius: 18px;
+    background: #111827;
+    border: 1px solid #374151;
+    margin-bottom: 0.9rem;
+}
+
+.match-card-topline {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
+    margin-bottom: 0.65rem;
+}
+
+.status-pill {
+    display: inline-block;
+    padding: 0.2rem 0.55rem;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 800;
+}
+
+.status-live {
+    background: rgba(34,197,94,0.16);
+    color: #86EFAC;
+}
+
+.status-finished {
+    background: rgba(59,130,246,0.16);
+    color: #BFDBFE;
+}
+
+.status-scheduled {
+    background: rgba(250,204,21,0.14);
+    color: #FDE68A;
+}
+
+.match-context {
+    color: #9CA3AF;
+    font-size: 13px;
+}
+
+.match-title {
+    font-size: 24px;
+    font-weight: 900;
+    margin-bottom: 0.75rem;
+}
+
+.impact-title {
+    color: #9CA3AF;
+    font-size: 13px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 0.35rem;
+}
+
+.impact-list {
+    margin: 0;
+    padding-left: 1.1rem;
+    color: #D1D5DB;
+    line-height: 1.6;
+}
+
+.impact-detail {
+    color: #9CA3AF;
+}
+
 div[data-testid="stDataFrame"] {
     border-radius: 16px;
     overflow: hidden;
@@ -828,7 +1026,7 @@ else:
 
 team_table, owner_table, match_log = build_tables(matches, draft)
 
-tabs = st.tabs(["🏆 Standings", "👤 Owner Dashboard", "🌎 All Teams", "📋 Match Log", "📖 Rules"])
+tabs = st.tabs(["🏆 Standings", "👤 Owner Dashboard", "🌎 All Teams", "⚽ Match Center", "📖 Rules"])
 
 with tabs[0]:
     st.subheader("League Standings")
@@ -943,44 +1141,33 @@ with tabs[2]:
         st.dataframe(display, use_container_width=True, hide_index=True)
 
 with tabs[3]:
-    st.subheader("Match Log")
+    st.subheader("Match Center")
+    st.markdown('<div class="section-note">See live, upcoming, and completed matches with fantasy impact for drafted teams.</div>', unsafe_allow_html=True)
 
     if match_log.empty:
-        st.info("No match log yet.")
+        st.info("No match data yet.")
     else:
-        display = match_log.sort_values(["date", "team"]).copy()
+        match_center = match_log.copy()
+        match_center["_bucket"] = match_center.apply(match_bucket, axis=1)
 
-        if "date" in display.columns:
-            display["date"] = display["date"].map(format_match_datetime)
+        live_rows = match_center[match_center["_bucket"] == "live"]
+        today_rows = match_center[match_center["_bucket"] == "today"]
+        upcoming_rows = match_center[match_center["_bucket"] == "upcoming"]
+        completed_rows = match_center[match_center["_bucket"] == "completed"]
 
-        if "status" in display.columns:
-            display["status"] = display["status"].map(pretty_status)
+        render_match_section("Live Now", live_rows, "No live matches right now.")
+        render_match_section("Today’s Matches", today_rows, "No drafted-team matches today.")
+        render_match_section("Upcoming Matches", upcoming_rows, "No upcoming drafted-team matches found.", limit=12)
 
-        if "stage" in display.columns:
-            display["stage"] = display["stage"].map(pretty_competition_label)
-
-        if "group" in display.columns:
-            display["group"] = display["group"].map(pretty_competition_label)
-
-        display = pretty_match_log(display)
-
-        wanted_cols = [
-            "Date",
-            "Owner",
-            "Country",
-            "Opponent",
-            "Stage",
-            "Group",
-            "Status",
-            "Score",
-            "Result",
-            "Pts",
-            "3+ Bonus",
-            "Shutout Bonus",
-        ]
-
-        display = display[[c for c in wanted_cols if c in display.columns]]
-        st.dataframe(display, use_container_width=True, hide_index=True)
+        # Completed matches are shown newest first.
+        if completed_rows.empty:
+            st.markdown("### Completed Matches")
+            st.info("No completed drafted-team matches yet.")
+        else:
+            completed_rows = completed_rows.copy()
+            completed_rows["_sort_dt"] = completed_rows.apply(match_sort_datetime, axis=1)
+            completed_rows = completed_rows.sort_values("_sort_dt", ascending=False).drop(columns=["_sort_dt"], errors="ignore")
+            render_match_section("Completed Matches", completed_rows, "No completed drafted-team matches yet.", limit=12)
 
 with tabs[4]:
     st.subheader("Scoring Rules")
