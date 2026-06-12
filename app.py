@@ -399,6 +399,41 @@ def pretty_match_log(df):
     )
 
 
+
+def format_scoring_breakdown(row: pd.Series) -> tuple[str, list[str]]:
+    """Return a human-readable summary and bullet list for how fantasy points were earned."""
+    points = int(row.get("match_points", 0))
+    result = row.get("result", "")
+    score = row.get("score", "")
+    opponent = row.get("opponent", "")
+    status = row.get("status", "")
+
+    if not score:
+        summary = f"vs {opponent} • {status}"
+    else:
+        summary = f"vs {opponent} • {score}"
+
+    items = []
+
+    if result == "W":
+        items.append("+3 Win")
+    elif result == "D":
+        items.append("+1 Draw")
+    elif result == "L":
+        items.append("+0 Loss")
+    else:
+        items.append("+0 No scoring result yet")
+
+    if int(row.get("win_by_3_bonus", 0)) > 0:
+        items.append("+1 Win by 3+ goals")
+
+    if int(row.get("shutout_win_bonus", 0)) > 0:
+        items.append("+1 Shutout win")
+
+    items.append(f"Total: +{points}")
+
+    return summary, items
+
 st.markdown(
     """
 <style>
@@ -526,6 +561,45 @@ div[data-testid="stDataFrame"] {
     border-radius: 16px;
     overflow: hidden;
 }
+
+.breakdown-card {
+    padding: 1rem;
+    border-radius: 18px;
+    background: #111827;
+    border: 1px solid #374151;
+    margin-bottom: 1rem;
+}
+
+.breakdown-title {
+    font-size: 20px;
+    font-weight: 850;
+    margin-bottom: 0.25rem;
+}
+
+.breakdown-subtitle {
+    color: #9CA3AF;
+    font-size: 13px;
+    margin-bottom: 0.75rem;
+}
+
+.point-line {
+    padding: 0.45rem 0.6rem;
+    border-radius: 10px;
+    background: rgba(255,255,255,0.04);
+    margin-bottom: 0.35rem;
+    color: #E5E7EB;
+    font-size: 14px;
+}
+
+.total-line {
+    padding: 0.55rem 0.6rem;
+    border-radius: 10px;
+    background: rgba(250,204,21,0.12);
+    color: #FACC15;
+    font-weight: 850;
+    margin-top: 0.5rem;
+}
+
 </style>
 """,
     unsafe_allow_html=True,
@@ -562,7 +636,7 @@ else:
 
 team_table, owner_table, match_log = build_tables(matches, draft)
 
-tabs = st.tabs(["🏆 Standings", "🌎 Teams", "📋 Match Log", "📖 Rules"])
+tabs = st.tabs(["🏆 Standings", "🌎 Teams", "🧾 Scoring Breakdown", "📋 Match Log", "📖 Rules"])
 
 with tabs[0]:
     st.subheader("League Standings")
@@ -638,7 +712,110 @@ with tabs[1]:
         display = display[[c for c in wanted_cols if c in display.columns]]
         st.dataframe(display, use_container_width=True, hide_index=True)
 
+
 with tabs[2]:
+    st.subheader("Scoring Breakdown")
+    st.markdown(
+        '<div class="section-note">Pick an owner and country to see exactly how each match contributed to their fantasy score.</div>',
+        unsafe_allow_html=True,
+    )
+
+    if match_log.empty:
+        st.info("No scoring breakdown yet. Once match data is available, each country’s points will be explained here.")
+    else:
+        owner_options = sorted(match_log["owner"].dropna().unique())
+        selected_breakdown_owner = st.selectbox(
+            "Select an owner",
+            owner_options,
+            key="breakdown_owner",
+        )
+
+        owner_matches = match_log[match_log["owner"] == selected_breakdown_owner].copy()
+        team_options = sorted(owner_matches["team"].dropna().unique())
+
+        selected_breakdown_team = st.selectbox(
+            "Select a country",
+            team_options,
+            key="breakdown_team",
+        )
+
+        team_matches = owner_matches[owner_matches["team"] == selected_breakdown_team].copy()
+        team_matches = team_matches.sort_values("date")
+
+        team_row = team_table[
+            (team_table["owner"] == selected_breakdown_owner)
+            & (team_table["team"] == selected_breakdown_team)
+        ]
+
+        if not team_row.empty:
+            totals = team_row.iloc[0]
+            st.markdown(
+                f"""
+<div class="country-card">
+    <div class="country-name">{selected_breakdown_team}</div>
+    <div class="country-owner">Owned by {selected_breakdown_owner}</div>
+    <div class="country-points">{int(totals["total_points"])} pts</div>
+    <div class="country-meta">
+        Match Points: {int(totals["match_points"])}<br>
+        Advancement Bonus: {int(totals["advancement_bonus"])}<br>
+        Record: {totals["record"]}
+    </div>
+</div>
+""",
+                unsafe_allow_html=True,
+            )
+
+        scoring_matches = team_matches[
+            (team_matches["match_points"] > 0)
+            | (team_matches["result"].isin(["W", "D", "L"]))
+        ]
+
+        if scoring_matches.empty:
+            st.info("This country does not have any completed or scoring matches yet.")
+        else:
+            for _, match_row in scoring_matches.iterrows():
+                summary, items = format_scoring_breakdown(match_row)
+
+                point_lines = ""
+                for item in items:
+                    if item.startswith("Total"):
+                        point_lines += f'<div class="total-line">{item}</div>'
+                    else:
+                        point_lines += f'<div class="point-line">{item}</div>'
+
+                st.markdown(
+                    f"""
+<div class="breakdown-card">
+    <div class="breakdown-title">{selected_breakdown_team}</div>
+    <div class="breakdown-subtitle">{summary} • {match_row.get("stage", "")} {match_row.get("group", "")}</div>
+    {point_lines}
+</div>
+""",
+                    unsafe_allow_html=True,
+                )
+
+        with st.expander("Raw scoring rows for this country"):
+            detail_display = team_matches.copy()
+            detail_display = pretty_match_log(detail_display)
+            wanted_cols = [
+                "Date",
+                "Owner",
+                "Country",
+                "Opponent",
+                "Stage",
+                "Group",
+                "Status",
+                "Score",
+                "Result",
+                "Pts",
+                "3+ Bonus",
+                "Shutout Bonus",
+            ]
+            detail_display = detail_display[[c for c in wanted_cols if c in detail_display.columns]]
+            st.dataframe(detail_display, use_container_width=True, hide_index=True)
+
+
+with tabs[3]:
     st.subheader("Match Log")
 
     if match_log.empty:
@@ -677,7 +854,7 @@ with tabs[2]:
         display = display[[c for c in wanted_cols if c in display.columns]]
         st.dataframe(display, use_container_width=True, hide_index=True)
 
-with tabs[3]:
+with tabs[4]:
     st.subheader("Scoring Rules")
 
     st.markdown(
