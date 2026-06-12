@@ -400,39 +400,119 @@ def pretty_match_log(df):
 
 
 
-def format_scoring_breakdown(row: pd.Series) -> tuple[str, list[str]]:
-    """Return a human-readable summary and bullet list for how fantasy points were earned."""
-    points = int(row.get("match_points", 0))
+
+def scoring_lines(row: pd.Series) -> list[str]:
+    """Return readable scoring components for one team/match row."""
+    lines = []
     result = row.get("result", "")
-    score = row.get("score", "")
-    opponent = row.get("opponent", "")
-    status = row.get("status", "")
-
-    if not score:
-        summary = f"vs {opponent} • {status}"
-    else:
-        summary = f"vs {opponent} • {score}"
-
-    items = []
+    points = int(row.get("match_points", 0) or 0)
+    win_by_3 = int(row.get("win_by_3_bonus", 0) or 0)
+    shutout = int(row.get("shutout_win_bonus", 0) or 0)
 
     if result == "W":
-        items.append("+3 Win")
+        lines.append("+3 Win")
     elif result == "D":
-        items.append("+1 Draw")
+        lines.append("+1 Draw")
     elif result == "L":
-        items.append("+0 Loss")
-    else:
-        items.append("+0 No scoring result yet")
+        lines.append("+0 Loss")
+    elif points == 0:
+        lines.append("No fantasy points yet")
 
-    if int(row.get("win_by_3_bonus", 0)) > 0:
-        items.append("+1 Win by 3+ goals")
+    if win_by_3:
+        lines.append("+1 Win by 3+ goals bonus")
+    if shutout:
+        lines.append("+1 Shutout win bonus")
 
-    if int(row.get("shutout_win_bonus", 0)) > 0:
-        items.append("+1 Shutout win")
+    return lines
 
-    items.append(f"Total: +{points}")
 
-    return summary, items
+def match_title(row: pd.Series) -> str:
+    team = row.get("team", "")
+    opponent = row.get("opponent", "")
+    score = row.get("score", "")
+    status = row.get("status", "")
+
+    if score:
+        return f"{team} {score} vs {opponent}"
+    return f"{team} vs {opponent} ({status})"
+
+
+def render_owner_summary_cards(owner_row: pd.Series):
+    summary_cols = st.columns(4)
+    values = [
+        ("Total Points", int(owner_row.get("total_points", 0))),
+        ("Match Points", int(owner_row.get("match_points", 0))),
+        ("Bonus Points", int(owner_row.get("advancement_bonus", 0))),
+        ("Record", owner_row.get("record", "0-0-0")),
+    ]
+
+    for col, (label, value) in zip(summary_cols, values):
+        with col:
+            st.markdown(
+                f"""
+<div class="mini-stat-card">
+    <div class="mini-stat-label">{label}</div>
+    <div class="mini-stat-value">{value}</div>
+</div>
+""",
+                unsafe_allow_html=True,
+            )
+
+
+def render_country_breakdown_card(row: pd.Series, country_matches: pd.DataFrame):
+    live_badge = '<span class="live-pill">LIVE</span>' if int(row.get("live_games", 0)) > 0 else '<span class="dead-pill">IDLE</span>'
+
+    st.markdown(
+        f"""
+<div class="dashboard-country-card">
+    <div class="dashboard-country-topline">
+        <div>
+            <div class="country-name">{row["team"]} {live_badge}</div>
+            <div class="country-owner">Record: {row["record"]}</div>
+        </div>
+        <div class="country-points">{int(row["total_points"])} pts</div>
+    </div>
+    <div class="country-meta">
+        Match Points: {int(row["match_points"])} &nbsp;•&nbsp; Advancement Bonus: {int(row["advancement_bonus"])}
+    </div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+    with st.expander(f"Point breakdown for {row['team']}"):
+        if country_matches.empty:
+            st.write("No completed or live match scoring yet.")
+            return
+
+        country_matches = country_matches.sort_values("date")
+
+        for _, match in country_matches.iterrows():
+            lines = scoring_lines(match)
+            line_html = "".join(f"<li>{line}</li>" for line in lines)
+            status = match.get("status", "")
+            status_label = {
+                "FINISHED": "✅ Finished",
+                "IN_PLAY": "🟢 Live",
+                "PAUSED": "🟡 Paused",
+                "TIMED": "⏳ Scheduled",
+                "SCHEDULED": "⏳ Scheduled",
+            }.get(status, status)
+
+            st.markdown(
+                f"""
+<div class="breakdown-card">
+    <div class="breakdown-title">{match_title(match)}</div>
+    <div class="breakdown-subtitle">{status_label} • {match.get("stage", "")}</div>
+    <ul class="breakdown-list">
+        {line_html}
+    </ul>
+    <div class="breakdown-total">Match Total: +{int(match.get("match_points", 0) or 0)}</div>
+</div>
+""",
+                unsafe_allow_html=True,
+            )
+
 
 st.markdown(
     """
@@ -557,49 +637,78 @@ st.markdown(
     margin-bottom: 1rem;
 }
 
-div[data-testid="stDataFrame"] {
+
+.mini-stat-card {
+    padding: 1rem;
     border-radius: 16px;
-    overflow: hidden;
+    background: #111827;
+    border: 1px solid #374151;
+    min-height: 100px;
 }
 
-.breakdown-card {
+.mini-stat-label {
+    color: #9CA3AF;
+    font-size: 13px;
+    margin-bottom: 0.35rem;
+}
+
+.mini-stat-value {
+    font-size: 30px;
+    font-weight: 900;
+}
+
+.dashboard-country-card {
     padding: 1rem;
     border-radius: 18px;
     background: #111827;
     border: 1px solid #374151;
-    margin-bottom: 1rem;
+    margin-top: 1rem;
+    margin-bottom: 0.4rem;
+}
+
+.dashboard-country-topline {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    align-items: flex-start;
+}
+
+.breakdown-card {
+    padding: 0.9rem 1rem;
+    border-radius: 14px;
+    background: #0B1220;
+    border: 1px solid #1F2937;
+    margin-bottom: 0.75rem;
 }
 
 .breakdown-title {
-    font-size: 20px;
-    font-weight: 850;
-    margin-bottom: 0.25rem;
+    font-size: 17px;
+    font-weight: 800;
+    margin-bottom: 0.2rem;
 }
 
 .breakdown-subtitle {
     color: #9CA3AF;
     font-size: 13px;
-    margin-bottom: 0.75rem;
+    margin-bottom: 0.45rem;
 }
 
-.point-line {
-    padding: 0.45rem 0.6rem;
-    border-radius: 10px;
-    background: rgba(255,255,255,0.04);
+.breakdown-list {
+    margin-top: 0.35rem;
     margin-bottom: 0.35rem;
-    color: #E5E7EB;
-    font-size: 14px;
+    color: #D1D5DB;
 }
 
-.total-line {
-    padding: 0.55rem 0.6rem;
-    border-radius: 10px;
-    background: rgba(250,204,21,0.12);
+.breakdown-total {
+    font-weight: 900;
     color: #FACC15;
-    font-weight: 850;
-    margin-top: 0.5rem;
+    margin-top: 0.35rem;
 }
 
+div[data-testid="stDataFrame"] {
+    border-radius: 16px;
+    overflow: hidden;
+}
 </style>
 """,
     unsafe_allow_html=True,
@@ -636,7 +745,7 @@ else:
 
 team_table, owner_table, match_log = build_tables(matches, draft)
 
-tabs = st.tabs(["🏆 Standings", "🌎 Teams", "🧾 Scoring Breakdown", "📋 Match Log", "📖 Rules"])
+tabs = st.tabs(["🏆 Standings", "👤 Owner Dashboard", "🌎 All Teams", "📋 Match Log", "📖 Rules"])
 
 with tabs[0]:
     st.subheader("League Standings")
@@ -671,11 +780,49 @@ with tabs[0]:
             st.dataframe(display, use_container_width=True, hide_index=True)
 
 with tabs[1]:
-    st.subheader("Team Cards")
-    st.markdown('<div class="section-note">Filter by owner to view each drafted country as a card.</div>', unsafe_allow_html=True)
+    st.subheader("Owner Dashboard")
+    st.markdown('<div class="section-note">Pick an owner to see their full roster and exactly how each country has earned points.</div>', unsafe_allow_html=True)
 
     owners = sorted(team_table["owner"].dropna().unique())
-    selected_owner = st.selectbox("Select an owner", ["All Owners"] + owners)
+
+    if not owners:
+        st.info("No owners found yet.")
+    else:
+        selected_dashboard_owner = st.selectbox("Select owner", owners, key="owner_dashboard_select")
+
+        owner_row_df = owner_table[owner_table["owner"] == selected_dashboard_owner]
+        owner_teams = team_table[team_table["owner"] == selected_dashboard_owner].sort_values(
+            ["total_points", "match_points"], ascending=False
+        )
+
+        if owner_row_df.empty:
+            st.info("No owner data found.")
+        else:
+            owner_row = owner_row_df.iloc[0]
+            st.markdown(f"### {selected_dashboard_owner}")
+            render_owner_summary_cards(owner_row)
+
+            st.markdown("### Roster")
+
+            for _, country_row in owner_teams.iterrows():
+                country = country_row["team"]
+
+                if match_log.empty:
+                    country_matches = pd.DataFrame()
+                else:
+                    country_matches = match_log[
+                        (match_log["owner"] == selected_dashboard_owner)
+                        & (match_log["team"] == country)
+                    ].copy()
+
+                render_country_breakdown_card(country_row, country_matches)
+
+with tabs[2]:
+    st.subheader("All Team Cards")
+    st.markdown('<div class="section-note">Filter by owner to view drafted countries as cards.</div>', unsafe_allow_html=True)
+
+    owners = sorted(team_table["owner"].dropna().unique())
+    selected_owner = st.selectbox("Select an owner", ["All Owners"] + owners, key="all_teams_owner_select")
 
     filtered = team_table.copy()
 
@@ -711,109 +858,6 @@ with tabs[1]:
         wanted_cols = ["Owner", "Country", "Total", "Match Pts", "Bonus", "Record", "Live"]
         display = display[[c for c in wanted_cols if c in display.columns]]
         st.dataframe(display, use_container_width=True, hide_index=True)
-
-
-with tabs[2]:
-    st.subheader("Scoring Breakdown")
-    st.markdown(
-        '<div class="section-note">Pick an owner and country to see exactly how each match contributed to their fantasy score.</div>',
-        unsafe_allow_html=True,
-    )
-
-    if match_log.empty:
-        st.info("No scoring breakdown yet. Once match data is available, each country’s points will be explained here.")
-    else:
-        owner_options = sorted(match_log["owner"].dropna().unique())
-        selected_breakdown_owner = st.selectbox(
-            "Select an owner",
-            owner_options,
-            key="breakdown_owner",
-        )
-
-        owner_matches = match_log[match_log["owner"] == selected_breakdown_owner].copy()
-        team_options = sorted(owner_matches["team"].dropna().unique())
-
-        selected_breakdown_team = st.selectbox(
-            "Select a country",
-            team_options,
-            key="breakdown_team",
-        )
-
-        team_matches = owner_matches[owner_matches["team"] == selected_breakdown_team].copy()
-        team_matches = team_matches.sort_values("date")
-
-        team_row = team_table[
-            (team_table["owner"] == selected_breakdown_owner)
-            & (team_table["team"] == selected_breakdown_team)
-        ]
-
-        if not team_row.empty:
-            totals = team_row.iloc[0]
-            st.markdown(
-                f"""
-<div class="country-card">
-    <div class="country-name">{selected_breakdown_team}</div>
-    <div class="country-owner">Owned by {selected_breakdown_owner}</div>
-    <div class="country-points">{int(totals["total_points"])} pts</div>
-    <div class="country-meta">
-        Match Points: {int(totals["match_points"])}<br>
-        Advancement Bonus: {int(totals["advancement_bonus"])}<br>
-        Record: {totals["record"]}
-    </div>
-</div>
-""",
-                unsafe_allow_html=True,
-            )
-
-        scoring_matches = team_matches[
-            (team_matches["match_points"] > 0)
-            | (team_matches["result"].isin(["W", "D", "L"]))
-        ]
-
-        if scoring_matches.empty:
-            st.info("This country does not have any completed or scoring matches yet.")
-        else:
-            for _, match_row in scoring_matches.iterrows():
-                summary, items = format_scoring_breakdown(match_row)
-
-                point_lines = ""
-                for item in items:
-                    if item.startswith("Total"):
-                        point_lines += f'<div class="total-line">{item}</div>'
-                    else:
-                        point_lines += f'<div class="point-line">{item}</div>'
-
-                st.markdown(
-                    f"""
-<div class="breakdown-card">
-    <div class="breakdown-title">{selected_breakdown_team}</div>
-    <div class="breakdown-subtitle">{summary} • {match_row.get("stage", "")} {match_row.get("group", "")}</div>
-    {point_lines}
-</div>
-""",
-                    unsafe_allow_html=True,
-                )
-
-        with st.expander("Raw scoring rows for this country"):
-            detail_display = team_matches.copy()
-            detail_display = pretty_match_log(detail_display)
-            wanted_cols = [
-                "Date",
-                "Owner",
-                "Country",
-                "Opponent",
-                "Stage",
-                "Group",
-                "Status",
-                "Score",
-                "Result",
-                "Pts",
-                "3+ Bonus",
-                "Shutout Bonus",
-            ]
-            detail_display = detail_display[[c for c in wanted_cols if c in detail_display.columns]]
-            st.dataframe(detail_display, use_container_width=True, hide_index=True)
-
 
 with tabs[3]:
     st.subheader("Match Log")
