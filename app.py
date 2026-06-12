@@ -89,7 +89,16 @@ def normalize_team(name: str) -> str:
 
 def team_label(team: str) -> str:
     normalized = normalize_team(team)
-    return f"{FLAGS.get(normalized, '🏳️')} {normalized}"
+    value = FLAGS.get(normalized, "")
+
+    if len(value) == 2 and value.isalpha():
+        flag = "".join(chr(127397 + ord(char.upper())) for char in value)
+        return f"{flag} {normalized}"
+
+    if value:
+        return f"{value} {normalized}"
+
+    return f"🏳️ {normalized}"
     
 def get_secret_token() -> str:
     try:
