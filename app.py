@@ -673,6 +673,74 @@ def render_match_section(title: str, rows: pd.DataFrame, empty_message: str, lim
         render_match_card(rows[rows["_match_key"] == key].drop(columns=["_sort_dt", "_match_key"], errors="ignore"))
 
 
+def owner_upcoming_match_rows(match_log: pd.DataFrame, owner: str) -> pd.DataFrame:
+    """Return all rows for matches involving the selected owner's teams that are not finished yet."""
+    if match_log.empty:
+        return pd.DataFrame()
+
+    working = match_log.copy()
+    working["_match_key"] = working.apply(match_card_key, axis=1)
+    working["_bucket"] = working.apply(match_bucket, axis=1)
+
+    owner_keys = working.loc[
+        (working["owner"] == owner) & (working["_bucket"].isin(["live", "today", "upcoming"])),
+        "_match_key",
+    ].dropna().unique()
+
+    if len(owner_keys) == 0:
+        return pd.DataFrame()
+
+    return working[working["_match_key"].isin(owner_keys)].copy()
+
+
+def render_owner_upcoming_matches(owner: str, match_log: pd.DataFrame):
+    """Render upcoming/live match cards for one owner inside the Owner Dashboard."""
+    rows = owner_upcoming_match_rows(match_log, owner)
+
+    st.markdown("### Upcoming Matches")
+
+    if rows.empty:
+        st.info("No upcoming matches found for this owner right now.")
+        return
+
+    rows["_sort_dt"] = rows.apply(match_sort_datetime, axis=1)
+    rows["_match_key"] = rows.apply(match_card_key, axis=1)
+
+    ordered_keys = (
+        rows.sort_values("_sort_dt")
+        .drop_duplicates("_match_key")["_match_key"]
+        .tolist()
+    )
+
+    for key in ordered_keys[:8]:
+        render_match_card(rows[rows["_match_key"] == key].drop(columns=["_sort_dt", "_match_key", "_bucket"], errors="ignore"))
+
+
+def next_match_text(country_matches: pd.DataFrame) -> str:
+    """Small summary for a country card: live match or next scheduled opponent/time."""
+    if country_matches.empty:
+        return "No upcoming match listed"
+
+    working = country_matches.copy()
+    working["_bucket"] = working.apply(match_bucket, axis=1)
+    working["_sort_dt"] = working.apply(match_sort_datetime, axis=1)
+
+    live_rows = working[working["_bucket"] == "live"].sort_values("_sort_dt")
+    if not live_rows.empty:
+        row = live_rows.iloc[0]
+        score = row.get("score", "")
+        score_text = f" • {score}" if score else ""
+        return f"Live vs {row.get('opponent', '')}{score_text}"
+
+    future_rows = working[working["_bucket"].isin(["today", "upcoming"])].sort_values("_sort_dt")
+    if not future_rows.empty:
+        row = future_rows.iloc[0]
+        when = format_match_datetime(row.get("date", ""))
+        return f"Next: vs {row.get('opponent', '')} • {when}"
+
+    return "No upcoming match listed"
+
+
 def render_owner_summary_cards(owner_row: pd.Series):
     summary_cols = st.columns(4)
     values = [
@@ -696,7 +764,8 @@ def render_owner_summary_cards(owner_row: pd.Series):
 
 
 def render_country_breakdown_card(row: pd.Series, country_matches: pd.DataFrame):
-    live_badge = '<span class="live-pill">LIVE</span>' if int(row.get("live_games", 0)) > 0 else '<span class="dead-pill">IDLE</span>'
+    live_badge = '<span class="live-pill">LIVE</span>' if int(row.get("live_games", 0)) > 0 else ''
+    next_text = next_match_text(country_matches)
 
     st.markdown(
         f"""
@@ -705,6 +774,7 @@ def render_country_breakdown_card(row: pd.Series, country_matches: pd.DataFrame)
         <div>
             <div class="country-name">{row["team"]} {live_badge}</div>
             <div class="country-owner">Record: {row["record"]}</div>
+            <div class="country-next-match">{next_text}</div>
         </div>
         <div class="country-points">{int(row["total_points"])} pts</div>
     </div>
@@ -718,7 +788,7 @@ def render_country_breakdown_card(row: pd.Series, country_matches: pd.DataFrame)
 
     with st.expander(f"Point breakdown for {row['team']}"):
         if country_matches.empty:
-            st.write("No completed or live match scoring yet.")
+            st.write("No completed, live, or upcoming matches found.")
             return
 
         country_matches = country_matches.sort_values("date")
@@ -741,6 +811,7 @@ def render_country_breakdown_card(row: pd.Series, country_matches: pd.DataFrame)
 """,
                 unsafe_allow_html=True,
             )
+
 
 
 st.markdown(
@@ -824,6 +895,13 @@ st.markdown(
 .country-owner {
     color: #9CA3AF;
     font-size: 13px;
+    margin-bottom: 0.35rem;
+}
+
+.country-next-match {
+    color: #BFDBFE;
+    font-size: 13px;
+    font-weight: 700;
     margin-bottom: 0.8rem;
 }
 
@@ -1139,6 +1217,8 @@ with tabs[1]:
             owner_row = owner_row_df.iloc[0]
             st.markdown(f"### {selected_dashboard_owner}")
             render_owner_summary_cards(owner_row)
+
+            render_owner_upcoming_matches(selected_dashboard_owner, match_log)
 
             st.markdown("### Roster")
 
