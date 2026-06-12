@@ -34,7 +34,49 @@ TEAM_ALIASES = {
     "Türkiye": "Turkey",
     "IR Iran": "Iran",
 }
-
+FLAGS = {
+    "Mexico": "🇲🇽",
+    "South Africa": "🇿🇦",
+    "South Korea": "🇰🇷",
+    "Czechia": "🇨🇿",
+    "Canada": "🇨🇦",
+    "Bosnia and Herzegovina": "🇧🇦",
+    "Qatar": "🇶🇦",
+    "Switzerland": "🇨🇭",
+    "Brazil": "🇧🇷",
+    "Morocco": "🇲🇦",
+    "Haiti": "🇭🇹",
+    "Scotland": "🏴󠁧󠁢󠁳󠁣󠁴󠁿",
+    "United States": "🇺🇸",
+    "USA": "🇺🇸",
+    "Paraguay": "🇵🇾",
+    "Turkey": "🇹🇷",
+    "Australia": "🇦🇺",
+    "Germany": "🇩🇪",
+    "Curacao": "🇨🇼",
+    "Curaçao": "🇨🇼",
+    "Ivory Coast": "🇨🇮",
+    "Ecuador": "🇪🇨",
+    "Netherlands": "🇳🇱",
+    "Japan": "🇯🇵",
+    "Sweden": "🇸🇪",
+    "Tunisia": "🇹🇳",
+    "Belgium": "🇧🇪",
+    "Egypt": "🇪🇬",
+    "Iran": "🇮🇷",
+    "New Zealand": "🇳🇿",
+    "Spain": "🇪🇸",
+    "Cabo Verde": "🇨🇻",
+    "Saudi Arabia": "🇸🇦",
+    "Uruguay": "🇺🇾",
+    "France": "🇫🇷",
+    "Senegal": "🇸🇳",
+    "Iraq": "🇮🇶",
+    "Norway": "🇳🇴",
+    "Argentina": "🇦🇷",
+    "Algeria": "🇩🇿",
+    "Austria": "🇦🇹",
+}
 MANUAL_ADVANCEMENT_BONUSES = {}
 
 
@@ -45,7 +87,10 @@ def normalize_team(name: str) -> str:
     name = TEAM_ALIASES.get(name, name)
     return re.sub(r"\s+", " ", name)
 
-
+def team_label(team: str) -> str:
+    normalized = normalize_team(team)
+    return f"{FLAGS.get(normalized, '🏳️')} {normalized}"
+    
 def get_secret_token() -> str:
     try:
         return st.secrets["FOOTBALL_DATA_TOKEN"]
@@ -366,6 +411,10 @@ def pretty_owner_table(df):
 
 def pretty_team_table(df):
     display = df.copy()
+
+    if "team" in display.columns:
+        display["team"] = display["team"].map(team_label)
+
     return display.rename(
         columns={
             "owner": "Owner",
@@ -619,7 +668,7 @@ with tabs[1]:
             st.markdown(
                 f"""
 <div class="country-card">
-    <div class="country-name">{row["team"]} {live_badge}</div>
+    <div class="country-name">{team_label(row["team"])} {live_badge}</div>
     <div class="country-owner">Owned by {row["owner"]}</div>
     <div class="country-points">{int(row["total_points"])} pts</div>
     <div class="country-meta">
