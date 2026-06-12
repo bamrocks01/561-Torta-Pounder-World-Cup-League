@@ -292,11 +292,95 @@ def build_tables(matches: list[dict], draft_df: pd.DataFrame):
 
     return all_teams.sort_values(["owner", "total_points"], ascending=[True, False]), owner_table, match_log
 
-st.title("The 561 Torta Pounder World Cup Draft ⚽️")
-st.caption("Live-ish scoring dashboard powered by football-data.org. Cached for 60 seconds to avoid API limits.")
+st.markdown(
+    """
+<style>
+.block-container {
+    padding-top: 2rem;
+}
+
+.hero {
+    padding: 1.25rem 1.5rem;
+    border-radius: 18px;
+    background: linear-gradient(135deg, #12372A 0%, #0B1F1A 100%);
+    border: 1px solid rgba(255,255,255,0.12);
+    margin-bottom: 1.5rem;
+}
+
+.hero h1 {
+    margin: 0;
+    font-size: 42px;
+    line-height: 1.1;
+}
+
+.hero p {
+    margin-top: 0.5rem;
+    color: #D1D5DB;
+}
+
+.card {
+    padding: 1rem;
+    border-radius: 16px;
+    background: #111827;
+    border: 1px solid #374151;
+    min-height: 120px;
+}
+
+.card-title {
+    color: #9CA3AF;
+    font-size: 14px;
+    margin-bottom: 0.35rem;
+}
+
+.card-score {
+    font-size: 34px;
+    font-weight: 800;
+}
+
+.rank-card {
+    padding: 1rem;
+    border-radius: 16px;
+    background: #111827;
+    border: 1px solid #374151;
+}
+
+.rank-name {
+    font-size: 24px;
+    font-weight: 800;
+}
+
+.rank-points {
+    font-size: 38px;
+    font-weight: 900;
+}
+
+.small-muted {
+    color: #9CA3AF;
+    font-size: 13px;
+}
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    """
+<div class="hero">
+    <h1>The 561 Torta Pounder World Cup Draft ⚽️</h1>
+    <p>Live-ish fantasy standings powered by football-data.org. Scores refresh every 60 seconds to stay within API limits.</p>
+</div>
+""",
+    unsafe_allow_html=True,
+)
 
 token = get_secret_token()
-draft = pd.read_csv("draft_teams.csv")
+
+try:
+    draft = pd.read_csv("draft_teams.csv")
+except FileNotFoundError:
+    st.error("draft_teams.csv was not found. Make sure it is uploaded to the GitHub repo root.")
+    st.stop()
+
 matches = []
 
 if not token:
@@ -310,55 +394,226 @@ else:
 
 team_table, owner_table, match_log = build_tables(matches, draft)
 
-col1, col2, col3 = st.columns(3)
-col1.metric("Drafted countries", len(draft))
-col2.metric("API matches loaded", len(matches))
-col3.metric("Last refreshed", datetime.now().strftime("%I:%M:%S %p"))
+# Clean column names for display
+def pretty_owner_table(df):
+    if df.empty:
+        return df
+    display = df.copy()
+    display = display.rename(
+        columns={
+            "owner": "Owner",
+            "total_points": "Total",
+            "match_points": "Match Pts",
+            "advancement_bonus": "Bonus",
+            "record": "Record",
+            "live_games": "Live",
+        }
+    )
+    return display
 
-st.subheader("League Standings")
-if owner_table.empty:
-    st.info("No match data yet. Once the API returns World Cup matches, standings will populate here.")
-else:
-    st.dataframe(
-        owner_table[["owner", "total_points", "match_points", "advancement_bonus", "record", "live_games"]],
-        use_container_width=True,
-        hide_index=True,
+def pretty_team_table(df):
+    if df.empty:
+        return df
+    display = df.copy()
+    display = display.rename(
+        columns={
+            "owner": "Owner",
+            "team": "Country",
+            "total_points": "Total",
+            "match_points": "Match Pts",
+            "advancement_bonus": "Bonus",
+            "record": "Record",
+            "live_games": "Live",
+        }
+    )
+    return display
+
+def pretty_match_log(df):
+    if df.empty:
+        return df
+    display = df.copy()
+    display = display.rename(
+        columns={
+            "date": "Date",
+            "owner": "Owner",
+            "team": "Country",
+            "opponent": "Opponent",
+            "stage": "Stage",
+            "group": "Group",
+            "status": "Status",
+            "score": "Score",
+            "result": "Result",
+            "match_points": "Pts",
+            "win_by_3_bonus": "3+ Bonus",
+            "shutout_win_bonus": "Shutout Bonus",
+        }
+    )
+    return display
+
+metric1, metric2, metric3 = st.columns(3)
+
+with metric1:
+    st.markdown(
+        f"""
+<div class="card">
+    <div class="card-title">Drafted Countries</div>
+    <div class="card-score">{len(draft)}</div>
+</div>
+""",
+        unsafe_allow_html=True,
     )
 
-st.subheader("Team Scores")
-st.dataframe(
-    team_table[["owner", "team", "total_points", "match_points", "advancement_bonus", "record", "live_games"]],
-    use_container_width=True,
-    hide_index=True,
-)
+with metric2:
+    st.markdown(
+        f"""
+<div class="card">
+    <div class="card-title">API Matches Loaded</div>
+    <div class="card-score">{len(matches)}</div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
 
-with st.expander("Match Log"):
-    if match_log.empty:
-        st.write("No match log yet.")
+with metric3:
+    st.markdown(
+        f"""
+<div class="card">
+    <div class="card-title">Last Refreshed</div>
+    <div class="card-score">{datetime.now().strftime("%I:%M %p")}</div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+st.write("")
+
+tabs = st.tabs(["🏆 Standings", "🌎 Teams", "📋 Match Log", "📖 Rules"])
+
+with tabs[0]:
+    st.subheader("League Standings")
+
+    if owner_table.empty:
+        st.info("No standings yet.")
     else:
-        display = match_log.sort_values(["date", "team"])
+        top = owner_table.sort_values(["total_points", "match_points"], ascending=False).head(3)
+
+        podium_cols = st.columns(3)
+
+        medals = ["🥇", "🥈", "🥉"]
+
+        for i, (_, row) in enumerate(top.iterrows()):
+            with podium_cols[i]:
+                st.markdown(
+                    f"""
+<div class="rank-card">
+    <div class="small-muted">{medals[i]} Rank {i + 1}</div>
+    <div class="rank-name">{row["owner"]}</div>
+    <div class="rank-points">{int(row["total_points"])}</div>
+    <div class="small-muted">Record: {row["record"]} • Bonus: {int(row["advancement_bonus"])}</div>
+</div>
+""",
+                    unsafe_allow_html=True,
+                )
+
+        st.write("")
+
+        display = pretty_owner_table(owner_table)
+        wanted_cols = ["Owner", "Total", "Match Pts", "Bonus", "Record", "Live"]
+        display = display[[c for c in wanted_cols if c in display.columns]]
+
         st.dataframe(
-            display[["date", "owner", "team", "opponent", "stage", "group", "status", "score", "result", "match_points", "win_by_3_bonus", "shutout_win_bonus"]],
+            display,
             use_container_width=True,
             hide_index=True,
         )
 
-with st.expander("Scoring Rules"):
-    st.markdown("""
-**Every Match**
-- 3 pts: Win
-- 1 pt: Draw
-- 0 pts: Loss
-- +1 bonus: Win by 3+ goals
-- +1 bonus: Shutout win
+with tabs[1]:
+    st.subheader("Owner Rosters")
 
-**Advancement Bonuses**
-- +3: Survive group stage
-- +5: Win Round of 32
-- +7: Win Quarterfinal
-- +10: Win Semifinal
-- +15: Win the Final
-- +25: Win the Cup
+    owners = sorted(team_table["owner"].dropna().unique())
 
-**Shootout rule:** counts as a draw for match-result scoring, plus applicable advancement bonus.
-""")
+    selected_owner = st.selectbox("Select an owner", ["All Owners"] + owners)
+
+    filtered = team_table.copy()
+
+    if selected_owner != "All Owners":
+        filtered = filtered[filtered["owner"] == selected_owner]
+
+    display = pretty_team_table(filtered)
+    wanted_cols = ["Owner", "Country", "Total", "Match Pts", "Bonus", "Record", "Live"]
+    display = display[[c for c in wanted_cols if c in display.columns]]
+
+    st.dataframe(
+        display.sort_values(["Owner", "Total"], ascending=[True, False]),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+with tabs[2]:
+    st.subheader("Match Log")
+
+    if match_log.empty:
+        st.info("No match log yet.")
+    else:
+        display = match_log.sort_values(["date", "team"]).copy()
+
+        if "status" in display.columns:
+            display["status"] = display["status"].replace(
+                {
+                    "FINISHED": "✅ Finished",
+                    "IN_PLAY": "🟢 Live",
+                    "PAUSED": "🟡 Paused",
+                    "TIMED": "⏳ Scheduled",
+                    "SCHEDULED": "⏳ Scheduled",
+                }
+            )
+
+        display = pretty_match_log(display)
+
+        wanted_cols = [
+            "Date",
+            "Owner",
+            "Country",
+            "Opponent",
+            "Stage",
+            "Group",
+            "Status",
+            "Score",
+            "Result",
+            "Pts",
+            "3+ Bonus",
+            "Shutout Bonus",
+        ]
+
+        display = display[[c for c in wanted_cols if c in display.columns]]
+
+        st.dataframe(
+            display,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+with tabs[3]:
+    st.subheader("Scoring Rules")
+
+    st.markdown(
+        """
+### Every Match
+- **3 pts**: Win
+- **1 pt**: Draw
+- **0 pts**: Loss
+- **+1 bonus**: Win by 3+ goals
+- **+1 bonus**: Shutout win
+
+### Advancement Bonuses
+- **+3**: Survive group stage
+- **+5**: Win Round of 32
+- **+7**: Win Quarterfinal
+- **+10**: Win Semifinal
+- **+15**: Win the Final
+- **+25**: Win the Cup
+
+### Shootout Rule
+Shootouts count as a draw for match-result scoring, plus the applicable advancement bonus.
+"""
+    )
