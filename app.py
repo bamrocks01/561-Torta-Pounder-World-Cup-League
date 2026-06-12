@@ -620,6 +620,9 @@ else:
 
 team_table, owner_table, match_log = build_tables(matches, draft)
 
+st.write(team_label("Mexico"))
+st.write(team_label("Portugal"))
+
 tabs = st.tabs(["🏆 Standings", "🌎 Teams", "📋 Match Log", "📖 Rules"])
 
 with tabs[0]:
