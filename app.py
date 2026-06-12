@@ -609,12 +609,10 @@ def render_match_card(match_rows: pd.DataFrame):
         participant_html = "<span class='matchup-chip'>" + "</span><span class='matchup-vs'>vs</span><span class='matchup-chip'>".join(
             f"{country} <span class='matchup-owner'>({owner})</span>" for country, owner in participants
         ) + "</span>"
-        matchup_html = f"""
-    <div class="matchup-block">
-        <div class="impact-title">Fantasy Matchup</div>
-        <div class="matchup-line">{participant_html}</div>
-    </div>
-"""
+        matchup_html = f"""<div class="matchup-block">
+    <div class="impact-title">Fantasy Matchup</div>
+    <div class="matchup-line">{participant_html}</div>
+</div>"""
 
     impact_items = []
     for _, row in match_rows.sort_values(["owner", "team"]).iterrows():
